@@ -1,0 +1,1 @@
+Building a tiny cyrillic transformer to generate infinite Sektor Gaza. 
