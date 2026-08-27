@@ -1,9 +1,10 @@
 import torch
+from settings import data_path
 
 ## a simple character level tokenizer 
 
 class CharTokenizer():
-    def __init__(self, data_path:str = "data"):
+    def __init__(self, data_path=data_path):
         with open(data_path + "/allsektorgaza.txt", 'r', encoding='utf-8') as f:
              alltext = f.read()
         self.unique = sorted(list(set(alltext)))
