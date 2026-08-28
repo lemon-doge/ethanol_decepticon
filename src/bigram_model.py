@@ -10,16 +10,17 @@ from settings import device, seed
 torch.manual_seed(seed)
 
 batch_size = 32
-context_len= 1
+context_len = 1
 lr = 1e-3
 train_iters = 24_000
 eval_interval = 300
-eval_iters = 1
+eval_iters = 200
 
 
 ## model definition
 tokenizer = CharTokenizer()
 vocab_size = tokenizer.vocab_size
+
 
 class BigramModel(nn.Module):
     def __init__(self, vocab_size):
@@ -27,48 +28,54 @@ class BigramModel(nn.Module):
         ## (each embedding models the distribuiton of the next token in the text after the current one)
         self.embeddings = nn.Embedding(vocab_size, vocab_size)
 
-    def forward(self, x:torch.tensor, y:torch.tensor = None)->[torch.tensor, torch.tensor]:
+    def forward(
+        self, x: torch.tensor, y: torch.tensor = None
+    ) -> [torch.tensor, torch.tensor]:
         """
         x: tensor of inputs: B x T, B - batch_size, T - context_len = 1
         y: tensor of targets: B x T, if present - loss is calculated
-        
+
         returns:
             logits: tensor of logits: B*T x C, C - vocab_size
-            loss: tensor of loss (if targets): B*T 
+            loss: tensor of loss (if targets): B*T
         """
-        
-        logits = self.embeddings(x) # B x 1 x C
 
-        B, T, C = logits.shape 
-        logits = logits.view(B*T, C)
+        logits = self.embeddings(x)  # B x 1 x C
+
+        B, T, C = logits.shape
+        logits = logits.view(B * T, C)
 
         if y is None:
             return logits, None
 
         else:
-            loss = nn.functional.cross_entropy(logits, y.view(B*T)) # reduction 'mean' by default, but we were going to take average anyway
+            loss = nn.functional.cross_entropy(
+                logits, y.view(B * T)
+            )  # reduction 'mean' by default, but we were going to take average anyway
             return logits, loss
 
-    def generate(self, input_seq:torch.tensor, max_new_tokens:int) -> torch.tensor:
+    def generate(self, input_seq: torch.tensor, max_new_tokens: int) -> torch.tensor:
         """
         input_seq: tensor of inputs: input_lenght
-        there is no reason for input_seq len > 1 as only the last token matters for prediction anyway 
+        there is no reason for input_seq len > 1 as only the last token matters for prediction anyway
         """
         seq = input_seq.clone().detach()
-   
+
         for _ in range(max_new_tokens):
-            logits, _ = self.forward(seq[:, -1].view(1,1))
-            probabilities = nn.functional.softmax(logits, dim = 1)
+            logits, _ = self.forward(seq[:, -1].view(1, 1))
+            probabilities = nn.functional.softmax(logits, dim=1)
             next_token = torch.multinomial(probabilities, num_samples=1)
             seq = torch.cat([seq, next_token], dim=1)
 
         return seq.squeeze(0)
 
+
 model = BigramModel(vocab_size).to(device)
 
 ## training cycle
-train_dataloader = DataLoader(tokenizer, mode = "train")
-val_dataloader = DataLoader(tokenizer, mode = "val")
+train_dataloader = DataLoader(tokenizer, mode="train")
+val_dataloader = DataLoader(tokenizer, mode="val")
+
 
 @torch.no_grad()
 def estimate_loss():
@@ -76,17 +83,17 @@ def estimate_loss():
     val_losses = []
     for _ in range(eval_iters):
         ## estimate train loss
-        x,y = train_dataloader.sample_batch(batch_size, context_len)
-        _, loss = model.forward(x,y)
+        x, y = train_dataloader.sample_batch(batch_size, context_len)
+        _, loss = model.forward(x, y)
         train_losses.append(loss.item())
-        
+
         ## estimate val loss
-        x,y = val_dataloader.sample_batch(batch_size, context_len)
-        _, loss = model.forward(x,y)
+        x, y = val_dataloader.sample_batch(batch_size, context_len)
+        _, loss = model.forward(x, y)
         val_losses.append(loss.item())
-    
+
     return torch.tensor(train_losses).mean(), torch.tensor(val_losses).mean()
-        
+
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
@@ -97,101 +104,100 @@ for i in range(train_iters):
 
     x, y = train_dataloader.sample_batch(batch_size, context_len)
 
-    logits, loss = model.forward(x,y)
+    logits, loss = model.forward(x, y)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
-## inference 
-input_seq = torch.zeros((1,1), dtype = torch.long, device = device)
+## inference
+input_seq = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(tokenizer.decode(model.generate(input_seq, 1000).tolist()))
 
 
 ## очкогнь топ :DD
 
-# i: 0, train_loss: 5.650867938995361, val_loss: 5.629129409790039
-# i: 300, train_loss: 5.412985801696777, val_loss: 5.075150966644287
-# i: 600, train_loss: 5.065393447875977, val_loss: 5.1328816413879395
-# i: 900, train_loss: 4.740131855010986, val_loss: 4.814980983734131
-# i: 1200, train_loss: 4.8646416664123535, val_loss: 4.584014892578125
-# i: 1500, train_loss: 4.599390983581543, val_loss: 4.457768440246582
-# i: 1800, train_loss: 4.3014373779296875, val_loss: 4.359938621520996
-# i: 2100, train_loss: 4.364396095275879, val_loss: 3.9562885761260986
-# i: 2400, train_loss: 4.057742595672607, val_loss: 3.9211089611053467
-# i: 2700, train_loss: 3.7680652141571045, val_loss: 3.7836005687713623
-# i: 3000, train_loss: 3.907585382461548, val_loss: 4.024327754974365
-# i: 3300, train_loss: 3.574305534362793, val_loss: 3.3532028198242188
-# i: 3600, train_loss: 3.5745248794555664, val_loss: 3.6722354888916016
-# i: 3900, train_loss: 3.5901780128479004, val_loss: 3.7732110023498535
-# i: 4200, train_loss: 3.482468843460083, val_loss: 3.3307042121887207
-# i: 4500, train_loss: 3.3694040775299072, val_loss: 3.5540366172790527
-# i: 4800, train_loss: 3.4673707485198975, val_loss: 3.394998550415039
-# i: 5100, train_loss: 2.8888309001922607, val_loss: 3.5059070587158203
-# i: 5400, train_loss: 3.160684585571289, val_loss: 3.1743693351745605
-# i: 5700, train_loss: 3.075775146484375, val_loss: 3.297616481781006
-# i: 6000, train_loss: 2.994102954864502, val_loss: 3.028944492340088
-# i: 6300, train_loss: 3.0656847953796387, val_loss: 3.101393222808838
-# i: 6600, train_loss: 2.88851261138916, val_loss: 3.0481271743774414
-# i: 6900, train_loss: 3.0056052207946777, val_loss: 3.050656795501709
-# i: 7200, train_loss: 2.912075996398926, val_loss: 3.145603656768799
-# i: 7500, train_loss: 2.8719160556793213, val_loss: 3.305203437805176
-# i: 7800, train_loss: 2.9050650596618652, val_loss: 3.0464649200439453
-# i: 8100, train_loss: 2.8446643352508545, val_loss: 2.9260706901550293
-# i: 8400, train_loss: 3.01002836227417, val_loss: 3.0573158264160156
-# i: 8700, train_loss: 2.7375669479370117, val_loss: 2.8933777809143066
-# i: 9000, train_loss: 3.1034960746765137, val_loss: 2.997084617614746
-# i: 9300, train_loss: 3.1222972869873047, val_loss: 2.856522560119629
-# i: 9600, train_loss: 2.7711973190307617, val_loss: 2.948763608932495
-# i: 9900, train_loss: 2.6354732513427734, val_loss: 2.9644854068756104
-# i: 10200, train_loss: 2.5546603202819824, val_loss: 3.206554412841797
-# i: 10500, train_loss: 2.783289909362793, val_loss: 2.599356174468994
-# i: 10800, train_loss: 2.8670530319213867, val_loss: 2.345198392868042
-# i: 11100, train_loss: 2.7114391326904297, val_loss: 2.8269567489624023
-# i: 11400, train_loss: 2.4010562896728516, val_loss: 2.5805201530456543
-# i: 11700, train_loss: 2.8165745735168457, val_loss: 2.516481399536133
-# i: 12000, train_loss: 3.070204496383667, val_loss: 2.7011964321136475
-# i: 12300, train_loss: 2.638627529144287, val_loss: 2.8542046546936035
-# i: 12600, train_loss: 2.751999855041504, val_loss: 2.8082380294799805
-# i: 12900, train_loss: 2.4360761642456055, val_loss: 2.542480945587158
-# i: 13200, train_loss: 2.7873637676239014, val_loss: 2.7141807079315186
-# i: 13500, train_loss: 3.009814739227295, val_loss: 2.818411350250244
-# i: 13800, train_loss: 2.434490442276001, val_loss: 2.402453899383545
-# i: 14100, train_loss: 2.7930080890655518, val_loss: 2.650812864303589
-# i: 14400, train_loss: 2.5477452278137207, val_loss: 2.502809524536133
-# i: 14700, train_loss: 2.7378389835357666, val_loss: 2.435553550720215
-# i: 15000, train_loss: 2.458915948867798, val_loss: 2.7416951656341553
-# i: 15300, train_loss: 2.3452539443969727, val_loss: 2.786374092102051
-# i: 15600, train_loss: 3.079981803894043, val_loss: 2.6386847496032715
-# i: 15900, train_loss: 2.611924171447754, val_loss: 2.7234489917755127
-# i: 16200, train_loss: 2.6857664585113525, val_loss: 2.966588258743286
-# i: 16500, train_loss: 2.5336904525756836, val_loss: 2.458209753036499
-# i: 16800, train_loss: 2.7871875762939453, val_loss: 2.3680903911590576
-# i: 17100, train_loss: 2.598294734954834, val_loss: 2.553623676300049
-# i: 17400, train_loss: 2.800591468811035, val_loss: 2.6504125595092773
-# i: 17700, train_loss: 2.6597306728363037, val_loss: 2.991525173187256
-# i: 18000, train_loss: 2.7203116416931152, val_loss: 2.7409167289733887
-# i: 18300, train_loss: 2.2721290588378906, val_loss: 3.03920841217041
-# i: 18600, train_loss: 2.7792603969573975, val_loss: 2.4626224040985107
-# i: 18900, train_loss: 2.744600296020508, val_loss: 2.6402082443237305
-# i: 19200, train_loss: 2.831350803375244, val_loss: 2.7500674724578857
-# i: 19500, train_loss: 2.7815046310424805, val_loss: 2.4240870475769043
-# i: 19800, train_loss: 2.676924705505371, val_loss: 2.5120718479156494
-# i: 20100, train_loss: 2.7285854816436768, val_loss: 2.645474910736084
-# i: 20400, train_loss: 2.685817241668701, val_loss: 2.807196617126465
-# i: 20700, train_loss: 2.862183094024658, val_loss: 2.6866302490234375
-# i: 21000, train_loss: 2.6589348316192627, val_loss: 2.608856678009033
-# i: 21300, train_loss: 2.871180534362793, val_loss: 2.620105266571045
-# i: 21600, train_loss: 2.5401060581207275, val_loss: 2.8620967864990234
-# i: 21900, train_loss: 2.251222848892212, val_loss: 2.1413838863372803
-# i: 22200, train_loss: 2.500415802001953, val_loss: 2.90496826171875
-# i: 22500, train_loss: 2.4760525226593018, val_loss: 2.5988173484802246
-# i: 22800, train_loss: 2.4755096435546875, val_loss: 2.672475814819336
-# i: 23100, train_loss: 2.638671875, val_loss: 2.912585973739624
-# i: 23400, train_loss: 2.556098699569702, val_loss: 2.8694753646850586
-# i: 23700, train_loss: 2.6808438301086426, val_loss: 2.6497466564178467
+# i: 0, train_loss: 5.524276256561279, val_loss: 5.519365310668945
+# i: 300, train_loss: 5.301318168640137, val_loss: 5.297584056854248
+# i: 600, train_loss: 5.054492473602295, val_loss: 5.075789928436279
+# i: 900, train_loss: 4.845836639404297, val_loss: 4.854664325714111
+# i: 1200, train_loss: 4.638599872589111, val_loss: 4.667730331420898
+# i: 1500, train_loss: 4.463444232940674, val_loss: 4.469172477722168
+# i: 1800, train_loss: 4.302103042602539, val_loss: 4.315141677856445
+# i: 2100, train_loss: 4.136773586273193, val_loss: 4.163461208343506
+# i: 2400, train_loss: 3.9952893257141113, val_loss: 4.0011067390441895
+# i: 2700, train_loss: 3.881920576095581, val_loss: 3.8752150535583496
+# i: 3000, train_loss: 3.748901605606079, val_loss: 3.774280309677124
+# i: 3300, train_loss: 3.630549907684326, val_loss: 3.673393487930298
+# i: 3600, train_loss: 3.54522705078125, val_loss: 3.5719692707061768
+# i: 3900, train_loss: 3.480905532836914, val_loss: 3.4798946380615234
+# i: 4200, train_loss: 3.367030382156372, val_loss: 3.4266045093536377
+# i: 4500, train_loss: 3.321549654006958, val_loss: 3.339921236038208
+# i: 4800, train_loss: 3.2461493015289307, val_loss: 3.2768704891204834
+# i: 5100, train_loss: 3.221133232116699, val_loss: 3.197401762008667
+# i: 5400, train_loss: 3.15397310256958, val_loss: 3.1630749702453613
+# i: 5700, train_loss: 3.1165764331817627, val_loss: 3.136323928833008
+# i: 6000, train_loss: 3.053553581237793, val_loss: 3.0799994468688965
+# i: 6300, train_loss: 3.0274839401245117, val_loss: 3.0425407886505127
+# i: 6600, train_loss: 2.9788320064544678, val_loss: 3.013742685317993
+# i: 6900, train_loss: 2.9463884830474854, val_loss: 2.9780778884887695
+# i: 7200, train_loss: 2.913201332092285, val_loss: 2.9252541065216064
+# i: 7500, train_loss: 2.8763980865478516, val_loss: 2.9032156467437744
+# i: 7800, train_loss: 2.8587169647216797, val_loss: 2.920964241027832
+# i: 8100, train_loss: 2.8502869606018066, val_loss: 2.8839757442474365
+# i: 8400, train_loss: 2.833986759185791, val_loss: 2.8816921710968018
+# i: 8700, train_loss: 2.8172695636749268, val_loss: 2.8621761798858643
+# i: 9000, train_loss: 2.807267427444458, val_loss: 2.8262577056884766
+# i: 9300, train_loss: 2.767460823059082, val_loss: 2.8026363849639893
+# i: 9600, train_loss: 2.764620304107666, val_loss: 2.7926573753356934
+# i: 9900, train_loss: 2.760199546813965, val_loss: 2.8019979000091553
+# i: 10200, train_loss: 2.7375121116638184, val_loss: 2.764894485473633
+# i: 10500, train_loss: 2.7347686290740967, val_loss: 2.7842159271240234
+# i: 10800, train_loss: 2.705352783203125, val_loss: 2.740980863571167
+# i: 11100, train_loss: 2.694432020187378, val_loss: 2.7814948558807373
+# i: 11400, train_loss: 2.7338454723358154, val_loss: 2.7480084896087646
+# i: 11700, train_loss: 2.7017698287963867, val_loss: 2.7220940589904785
+# i: 12000, train_loss: 2.6947805881500244, val_loss: 2.7332634925842285
+# i: 12300, train_loss: 2.7030463218688965, val_loss: 2.715024471282959
+# i: 12600, train_loss: 2.675504207611084, val_loss: 2.726285457611084
+# i: 12900, train_loss: 2.6973612308502197, val_loss: 2.716221570968628
+# i: 13200, train_loss: 2.689134120941162, val_loss: 2.724821090698242
+# i: 13500, train_loss: 2.6747026443481445, val_loss: 2.6915388107299805
+# i: 13800, train_loss: 2.6740176677703857, val_loss: 2.7169277667999268
+# i: 14100, train_loss: 2.6467177867889404, val_loss: 2.7017736434936523
+# i: 14400, train_loss: 2.6590824127197266, val_loss: 2.7034106254577637
+# i: 14700, train_loss: 2.6488752365112305, val_loss: 2.6854026317596436
+# i: 15000, train_loss: 2.633014440536499, val_loss: 2.700103521347046
+# i: 15300, train_loss: 2.6464431285858154, val_loss: 2.6627702713012695
+# i: 15600, train_loss: 2.646310329437256, val_loss: 2.676893949508667
+# i: 15900, train_loss: 2.6328375339508057, val_loss: 2.6764116287231445
+# i: 16200, train_loss: 2.636948347091675, val_loss: 2.6705384254455566
+# i: 16500, train_loss: 2.636268377304077, val_loss: 2.6789472103118896
+# i: 16800, train_loss: 2.612297296524048, val_loss: 2.679802894592285
+# i: 17100, train_loss: 2.612684965133667, val_loss: 2.671231746673584
+# i: 17400, train_loss: 2.620558738708496, val_loss: 2.6397833824157715
+# i: 17700, train_loss: 2.6313540935516357, val_loss: 2.6482794284820557
+# i: 18000, train_loss: 2.6061348915100098, val_loss: 2.652798652648926
+# i: 18300, train_loss: 2.5973610877990723, val_loss: 2.672912836074829
+# i: 18600, train_loss: 2.6180756092071533, val_loss: 2.6754586696624756
+# i: 18900, train_loss: 2.6192357540130615, val_loss: 2.620532274246216
+# i: 19200, train_loss: 2.61257266998291, val_loss: 2.659921884536743
+# i: 19500, train_loss: 2.5874741077423096, val_loss: 2.659451961517334
+# i: 19800, train_loss: 2.630084276199341, val_loss: 2.669220209121704
+# i: 20100, train_loss: 2.6194000244140625, val_loss: 2.6922998428344727
+# i: 20400, train_loss: 2.6104483604431152, val_loss: 2.6519174575805664
+# i: 20700, train_loss: 2.599254846572876, val_loss: 2.695037841796875
+# i: 21000, train_loss: 2.6208977699279785, val_loss: 2.661923408508301
+# i: 21300, train_loss: 2.5969247817993164, val_loss: 2.66178822517395
+# i: 21600, train_loss: 2.6223015785217285, val_loss: 2.669981002807617
+# i: 21900, train_loss: 2.593693256378174, val_loss: 2.6778392791748047
+# i: 22200, train_loss: 2.600562810897827, val_loss: 2.6464693546295166
+# i: 22500, train_loss: 2.6353647708892822, val_loss: 2.6694562435150146
+# i: 22800, train_loss: 2.6221039295196533, val_loss: 2.638852119445801
+# i: 23100, train_loss: 2.6384270191192627, val_loss: 2.65632700920105
+# i: 23400, train_loss: 2.6191442012786865, val_loss: 2.6710376739501953
+# i: 23700, train_loss: 2.612180233001709, val_loss: 2.6208367347717285
 
 # [КF4SONG>
-
 
 
 # Пр бли м нять!
