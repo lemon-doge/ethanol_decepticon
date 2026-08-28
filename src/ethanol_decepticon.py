@@ -1,31 +1,12 @@
 import torch
 import torch.nn as nn
-from data_loader import DataLoader
-from tokenizer import CharTokenizer
-from settings import device, seed
+from settings import device
 
 ## small decoder-only model to generate infinite Sektor Gaza
 
-## hyperparams
-torch.manual_seed(seed)
-
-batch_size = 64
-context_len = 256
-lr = 3e-4
-train_iters = 5_000
-eval_interval = 500
-eval_iters = 200
-d_model = 192
-d_ff = 4 * d_model
-n_heads = 6
-d_k = int(d_model / n_heads)
-n_layers = 6
-p_drop = 0.2
-
-
-## model definition
-tokenizer = CharTokenizer()
-vocab_size = tokenizer.vocab_size
+## hyperprams for generation
+temp = 0.8  # todo watch what happens wit 0.2
+top_k = 10  # todo try 10, 20
 
 
 class AttentionHead(nn.Module):
@@ -57,7 +38,7 @@ class AttentionHead(nn.Module):
 
         ## B x CL x d_k @ B x d_k x CL -> B x CL x CL - hoping for the broadcast
         s = q @ k.permute(0, 2, 1)
-        s /= d_k**-0.5
+        s /= d_k**0.5
         ## B x CL x CL -> B x CL x CL
         s = s.masked_fill(self.tril[:c_len, :c_len] == 0, float("-inf"))
         s = nn.functional.softmax(s, dim=2)
@@ -200,7 +181,6 @@ class EthanolDecepticon(nn.Module):
         """
 
         bs, cl = input_seq.shape
-        assert bs == targets.shape[0] and cl == targets.shape[1]
 
         res = self.embeddings(input_seq) + self.pe(
             torch.arange(cl, device=device)
@@ -228,83 +208,23 @@ class EthanolDecepticon(nn.Module):
         input_seq - integer input sequence tensor inititally of shape: B x CL
         """
         with torch.no_grad():
-            seq = input_seq.copy().detach()
+            seq = input_seq.clone().detach()
 
             for _ in range(max_new_tokens):
-                logits, _ = self.forward(seq[: -self.context_len :])
-                probabilities = nn.functional.softmax(logits[:, -1, :], dim=-1)
+                logits, _ = self.forward(
+                    seq[:, -self.context_len :]
+                )  # B x CL x vocab_size
+                logits = logits[:, -1, :]  # B x vocab_size — only the next-token prediction
+
+                ## add temperature
+                logits = logits / temp
+                ## add top-k sampling
+                values, _ = torch.topk(logits, k=top_k, dim=-1)  # B x top_k
+                # sorted descendingly -> values[:, [-1]] is the k-th largest (cutoff)
+                logits[logits < values[:, [-1]]] = float("-inf")
+
+                probabilities = nn.functional.softmax(logits, dim=-1)
                 next_token = torch.multinomial(probabilities, num_samples=1)
                 seq = torch.cat([seq, next_token], dim=1)
 
             return seq
-
-
-model = EthanolDecepticon(
-    vocab_size,
-    context_len,
-    d_model,
-    d_k,
-    d_ff,
-    p_drop,
-    n_heads,
-    n_layers,
-).to(device)
-
-## training cycle
-train_dataloader = DataLoader(tokenizer, mode="train")
-val_dataloader = DataLoader(tokenizer, mode="val")
-
-
-def estimate_loss():
-    with torch.no_grad():
-        model.eval()
-
-        train_losses = []
-        val_losses = []
-        for _ in range(eval_iters):
-            ## estimate train loss
-            x, y = train_dataloader.sample_batch(batch_size, context_len)
-            _, loss = model.forward(x, y)
-            train_losses.append(loss.item())
-
-            ## estimate val loss
-            x, y = val_dataloader.sample_batch(batch_size, context_len)
-            _, loss = model.forward(x, y)
-            val_losses.append(loss.item())
-
-        model.train()
-
-    return torch.tensor(train_losses).mean(), torch.tensor(val_losses).mean()
-
-
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-
-for i in range(train_iters):
-    if i % eval_interval == 0:
-        train_loss, val_loss = estimate_loss()
-        print(f"i: {i}, train_loss: {train_loss}, val_loss: {val_loss}")
-
-    x, y = train_dataloader.sample_batch(batch_size, context_len)
-
-    logits, loss = model.forward(x, y)
-    optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-    optimizer.step()
-
-
-## saving the model
-checkpoint = {
-    "model_state_dict": model.state_dict(),
-    "optimizer_state_dict": optimizer.state_dict(),
-    "step": i,
-    # everything needed to reconstruct the model:
-    "vocab_size": vocab_size,
-    "context_len": context_len,
-    "d_model": d_model,
-    "d_k": d_k,
-    "d_ff": d_ff,
-    "p_drop": p_drop,
-    "n_heads": n_heads,
-    "n_layers": n_layers,
-}
-torch.save(checkpoint, "checkpoints/ethanol_decepticon.pt")

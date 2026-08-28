@@ -1,5 +1,6 @@
 ## copyright / lyrics data
 *.txt
+!txt.txt
 
 ## python
 __pycache__/

@@ -23,5 +23,9 @@ model.load_state_dict(ckpt["model_state_dict"])
 model.eval()
 
 tokenizer = CharTokenizer()
-input_seq = tokenizer.encode("[Текст песни «Зелёный Слизень»]").to(device)
-print(tokenizer.decode(model.generate(input_seq, 1000).tolist()))
+input_seq = (
+    tokenizer.encode("<SONG>\n[Текст песни «Зелёный Слизень»]\n\n")
+    .unsqueeze(0)
+    .to(device)
+)
+print(tokenizer.decode(model.generate(input_seq, 1000).squeeze(0).tolist()))
